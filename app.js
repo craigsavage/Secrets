@@ -1,25 +1,15 @@
 // SETUP
 const express = require('express'),
-      app     = express();
+    app = express();
 
-const mongoose   = require('mongoose'),
-      bodyParser = require('body-parser');
+const mongoose = require('mongoose'),
+    bodyParser = require('body-parser'),
+    session = require('express-session'),
+    passport = require('passport'),
+    passportLocal = require('passport-local');
 
 // Linking environment variables
 require('dotenv').config();
-
-// Connecting Mongo Database
-const LOCAL_DB = `mongodb://localhost/${process.env.DB_NAME}`,
-      ATLAS_DB = `mongodb+srv://${process.env.DB_LOGIN}:${process.env.DB_PASSWORD}@secrets-jxsb5.mongodb.net/${process.env.DB_NAME}`;
-
-mongoose.connect(LOCAL_DB, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    useFindAndModify: false
-});
-
-// Database Models
-const User = require('./models/User');
 
 // APP SETUP ~~
 app.set('view engine', 'ejs');  // Let app use ejs
@@ -29,7 +19,34 @@ app.use(express.static('public'));  // Link static files
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-// Clear db for testing
+app.use(session({
+    secret: process.env.SECRET,
+    resave: false,
+    saveUninitialized: false,
+    // cookie: { secure: true }
+}));
+app.use(passport.initialize()); // Sets up passport for use
+app.use(passport.session());    // Use passport to create sessions
+
+// Connecting Mongo Database
+const LOCAL_DB = `mongodb://localhost/${process.env.DB_NAME}`,
+    ATLAS_DB = `mongodb+srv://${process.env.DB_LOGIN}:${process.env.DB_PASSWORD}@secrets-jxsb5.mongodb.net/${process.env.DB_NAME}`;
+
+mongoose.connect(LOCAL_DB, {
+    useNewUrlParser: true, useUnifiedTopology: true, useFindAndModify: false, useCreateIndex: true
+});
+
+// Database Models
+const User = require('./models/User');
+
+// use static authentication strategy
+passport.use(User.createStrategy());
+
+// use static serialize and deserialize of model for passport session support
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
+
+// // Clear db for testing
 // User.deleteMany({}, (err, result) => { console.log('Results:', result) });
 
 // ROUTES ~~
@@ -42,17 +59,17 @@ app.get('/login', (req, res) => {
 });
 
 app.post('/login', (req, res) => {
-    const username = req.body.username;
-    const password = req.body.password;
+    const user = new User({
+        username: req.body.username,
+        password: req.body.password
+    });
 
-    User.findOne({ email: username }, (err, foundUser) => {
+    req.login(user, (err) => {
         if(err) { console.log(err) }
         else {
-            if(password === foundUser.password) {
-                res.render('secrets');
-            } else {
-                console.log('incorrect password');
-            }
+            passport.authenticate('local')(req, res, () => {
+                res.redirect('/secrets');
+            });
         }
     });
 });
@@ -63,19 +80,32 @@ app.get('/register', (req, res) => {
 
 // Registers new users to the database
 app.post('/register', (req, res) => {
-    const newUser = new User({
-        email: req.body.username,
-        password: req.body.password
-    })
-
-    // Save the user to db then render the secret page
-    newUser.save((err, user) => {
-        if(!err) {
-            res.render('secrets')
+    User.register({username: req.body.username}, req.body.password, (err, user) => {
+        if(err) {
+            console.log(err);
+            res.redirect('/register');
         } else {
-            res.redirect('/')
+            passport.authenticate('local')(req, res, () => {
+                res.redirect('/secrets');
+            });
         }
     });
+});
+
+// Renders the secrets page to authenticated users
+app.get('/secrets', (req, res) => {
+    if(req.isAuthenticated()) {
+        res.render('secrets');
+    } else {
+        console.log('You need to login first');
+        res.redirect('/login');
+    } 
+});
+
+// Logout user
+app.get('/logout', (req, res) => {
+    req.logout();
+    res.redirect('/');
 });
 
 // Connect to SERVER
